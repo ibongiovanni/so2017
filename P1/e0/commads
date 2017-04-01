@@ -1,0 +1,8 @@
+gcc -E hello.c -o hello.i
+gcc -S hello.c
+gcc -c hello.c
+objdump -x hello.o
+objdump -d hello.o
+gcc -o hello hello.o
+objdump -x hello
+gcc -o hello hello.o
