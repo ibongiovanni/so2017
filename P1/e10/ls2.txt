@@ -1,0 +1,6 @@
+total 28
+-rw-r--r-- 1 nacho nacho     0 abr 24 20:53 ls2.txt
+-rwxrwxr-x 1 nacho nacho 13696 abr 24 20:53 mypipe
+-rw-rw-r-- 1 nacho nacho  2383 abr 24 20:53 mypipe.c
+-rw-rw-r-- 1 nacho nacho   757 abr 19 15:19 operators.c
+drwxrwxr-x 2 nacho nacho  4096 abr 19 15:49 test

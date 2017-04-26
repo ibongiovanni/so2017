@@ -66,10 +66,34 @@ redirect_in(char *cmd1, char *in_file){
 		execl("/bin/bash","bash", "-c", cmd1, (char *)0);
 	}
 	wait();
-	write(STDOUT_FILENO,"\n",1);
+	write(STDOUT_FILENO,"\n",1); //insert newline
+} 
+
+void
+redirect_out(char *cmd1, char *in_file){
+	int fd;
+
+	if (fork()==0)
+	{
+		close(1); //Close stdout
+		
+		// opens a file for writing, creating the file if it does not already exist. 
+		// If the file does exist, the system truncates the file to zero bytes.
+		// permissions: own:rw- grp:r-- oth:r--
+		fd = open (in_file, O_RDWR | O_CREAT | O_TRUNC,S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+		if (fd<0){
+			perror("cannot open file");
+			exit(1);
+		}
+		dup(fd); //Duplicate stdout in fd
+		//Run cmd1
+		execl("/bin/bash","bash", "-c", cmd1, (char *)0);
+	}
+	wait();
+	write(STDOUT_FILENO,"\n",1); //insert newline
 }
 
-int main(int argc, char const *argv[])
+int main(int argc, char *argv[])
 {
 	if (argc!=4){
 		printf("usage: %s 'cmd1' 'op' 'cmd2'\n",argv[0] );
@@ -78,7 +102,7 @@ int main(int argc, char const *argv[])
 	switch (keyfromstring(argv[2])) {
 		case O1: /* cmd1 | cmd2 */ pipecommands(argv[1],argv[3]); break;
 		case O2: /* cmd1 < in_file */ redirect_in(argv[1],argv[3]); break;
-		case O3: /* ... */ break;
+		case O3: /* cmd > out_file */ redirect_out(argv[1],argv[3]);break;
 		case O4: /* ... */ break;
 		case O5: /* ... */ break;
 		case O6: /* ... */ break;
