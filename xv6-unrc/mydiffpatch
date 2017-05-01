@@ -1,0 +1,1 @@
+diff -rupN so/xv6-unrc/xv6-unrc Escritorio/xv6-unrc/xv6-unrc/ > projN.patch

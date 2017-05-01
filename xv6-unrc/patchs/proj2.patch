@@ -1,0 +1,184 @@
+diff -rupN so/xv6-unrc/xv6-unrc/Makefile Escritorio/xv6-unrc/xv6-unrc/Makefile
+--- so/xv6-unrc/xv6-unrc/Makefile	2017-04-10 23:42:43.596529232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/Makefile	2017-04-27 10:28:28.839230013 -0300
+@@ -172,6 +172,7 @@ UPROGS=\
+ 	_usertests\
+ 	_wc\
+ 	_zombie\
++	_quantumtest\
+ 
+ fs.img: mkfs README $(UPROGS)
+ 	./mkfs fs.img README $(UPROGS)
+diff -rupN so/xv6-unrc/xv6-unrc/param.h Escritorio/xv6-unrc/xv6-unrc/param.h
+--- so/xv6-unrc/xv6-unrc/param.h	2017-04-10 23:42:43.596529232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/param.h	2017-04-27 10:28:28.839230013 -0300
+@@ -10,4 +10,4 @@
+ #define MAXOPBLOCKS  10  // max # of blocks any FS op writes
+ #define LOGSIZE      (MAXOPBLOCKS*3)  // max data sectors in on-disk log
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+-
++#define QUANTUM 10	 // max ticks a process has to use cpu
+\ No hay ningún carácter de nueva línea al final del archivo
+diff -rupN so/xv6-unrc/xv6-unrc/proc.c Escritorio/xv6-unrc/xv6-unrc/proc.c
+--- so/xv6-unrc/xv6-unrc/proc.c	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/proc.c	2017-04-27 12:36:06.042332991 -0300
+@@ -282,6 +282,7 @@ scheduler(void)
+       // before jumping back to us.
+       proc = p;
+       switchuvm(p);
++      p->tickscount=0;
+       p->state = RUNNING;
+       swtch(&cpu->scheduler, proc->context);
+       switchkvm();
+diff -rupN so/xv6-unrc/xv6-unrc/proc.h Escritorio/xv6-unrc/xv6-unrc/proc.h
+--- so/xv6-unrc/xv6-unrc/proc.h	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/proc.h	2017-04-27 10:28:28.843232013 -0300
+@@ -42,7 +42,7 @@ extern struct proc *proc asm("%gs:4");
+ // at the "Switch stacks" comment. Switch doesn't save eip explicitly,
+ // but it is on the stack and allocproc() manipulates it.
+ struct context {
+-  uint edi;
++    uint edi;
+   uint esi;
+   uint ebx;
+   uint ebp;
+@@ -66,6 +66,7 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  char tickscount;             // Ticks counter for timeslice
+ };
+ 
+ // Process memory is laid out contiguously, low addresses first:
+diff -rupN so/xv6-unrc/xv6-unrc/syscall.c Escritorio/xv6-unrc/xv6-unrc/syscall.c
+--- so/xv6-unrc/xv6-unrc/syscall.c	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/syscall.c	2017-04-27 12:25:03.054332991 -0300
+@@ -98,6 +98,7 @@ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_procstat(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -121,6 +122,7 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_procstat]   sys_procstat,
+ };
+ 
+ void
+diff -rupN so/xv6-unrc/xv6-unrc/syscall.h Escritorio/xv6-unrc/xv6-unrc/syscall.h
+--- so/xv6-unrc/xv6-unrc/syscall.h	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/syscall.h	2017-04-27 12:16:46.218332991 -0300
+@@ -20,3 +20,4 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_procstat 22
+diff -rupN so/xv6-unrc/xv6-unrc/sysproc.c Escritorio/xv6-unrc/xv6-unrc/sysproc.c
+--- so/xv6-unrc/xv6-unrc/sysproc.c	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/sysproc.c	2017-04-27 12:31:27.782332991 -0300
+@@ -89,3 +89,10 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++int
++sys_procstat(void)
++{
++  procdump();
++  return 0;
++}
+diff -rupN so/xv6-unrc/xv6-unrc/trap.c Escritorio/xv6-unrc/xv6-unrc/trap.c
+--- so/xv6-unrc/xv6-unrc/trap.c	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/trap.c	2017-04-27 10:28:28.843232013 -0300
+@@ -102,8 +102,10 @@ trap(struct trapframe *tf)
+ 
+   // Force process to give up CPU on clock tick.
+   // If interrupts were on while locks held, would need to check nlock.
+-  if(proc && proc->state == RUNNING && tf->trapno == T_IRQ0+IRQ_TIMER)
+-    yield();
++  if(proc && proc->state == RUNNING && tf->trapno == T_IRQ0+IRQ_TIMER){
++      proc->tickscount++;                            //Increase the pocess ticks counter
++      if (proc->tickscount > QUANTUM) yield();  //Realease the CPU if quamtum is over
++  }
+ 
+   // Check if the process has been killed since we yielded
+   if(proc && proc->killed && (tf->cs&3) == DPL_USER)
+diff -rupN so/xv6-unrc/xv6-unrc/user/forktest.c Escritorio/xv6-unrc/xv6-unrc/user/forktest.c
+--- so/xv6-unrc/xv6-unrc/user/forktest.c	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/forktest.c	2017-04-27 12:42:38.422332991 -0300
+@@ -21,6 +21,10 @@ forktest(void)
+   printf(1, "fork test\n");
+ 
+   for(n=0; n<N; n++){
++    if (n==4){ //fifth call
++      printf(1,"Calling procstat()\n");
++      procstat(); //show process status           
++    }
+     pid = fork();
+     if(pid < 0)
+       break;
+diff -rupN so/xv6-unrc/xv6-unrc/user/param.h Escritorio/xv6-unrc/xv6-unrc/user/param.h
+--- so/xv6-unrc/xv6-unrc/user/param.h	2017-04-10 23:42:43.596529232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/param.h	2017-04-27 10:28:28.839230013 -0300
+@@ -10,4 +10,4 @@
+ #define MAXOPBLOCKS  10  // max # of blocks any FS op writes
+ #define LOGSIZE      (MAXOPBLOCKS*3)  // max data sectors in on-disk log
+ #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
+-
++#define QUANTUM 10	 // max ticks a process has to use cpu
+\ No hay ningún carácter de nueva línea al final del archivo
+diff -rupN so/xv6-unrc/xv6-unrc/user/quantumtest.c Escritorio/xv6-unrc/xv6-unrc/user/quantumtest.c
+--- so/xv6-unrc/xv6-unrc/user/quantumtest.c	1969-12-31 21:00:00.000000000 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/quantumtest.c	2017-04-27 10:28:28.847234012 -0300
+@@ -0,0 +1,18 @@
++#include "types.h"
++#include "stat.h"
++#include "user.h"
++#include "fs.h"
++
++int 
++main(void)
++{	
++	int i=50000;
++	int p=1;
++	while(i>0){
++		if (i%2==0) p+=i;
++		else p-=i;
++		i--;
++	}
++	printf(1,"p = %d\n",p );
++	exit();
++}
+\ No hay ningún carácter de nueva línea al final del archivo
+diff -rupN so/xv6-unrc/xv6-unrc/user/syscall.h Escritorio/xv6-unrc/xv6-unrc/user/syscall.h
+--- so/xv6-unrc/xv6-unrc/user/syscall.h	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/syscall.h	2017-04-27 12:16:46.218332991 -0300
+@@ -20,3 +20,4 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_procstat 22
+diff -rupN so/xv6-unrc/xv6-unrc/user/user.h Escritorio/xv6-unrc/xv6-unrc/user/user.h
+--- so/xv6-unrc/xv6-unrc/user/user.h	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/user.h	2017-04-27 12:12:17.914332991 -0300
+@@ -23,6 +23,7 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int procstat(void);
+ 
+ // ulib.c
+ int stat(char*, struct stat*);
+diff -rupN so/xv6-unrc/xv6-unrc/user/usys.S Escritorio/xv6-unrc/xv6-unrc/user/usys.S
+--- so/xv6-unrc/xv6-unrc/user/usys.S	2017-04-10 23:42:43.600531232 -0300
++++ Escritorio/xv6-unrc/xv6-unrc/user/usys.S	2017-04-27 12:12:36.690332991 -0300
+@@ -29,3 +29,5 @@ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(procstat)
++
